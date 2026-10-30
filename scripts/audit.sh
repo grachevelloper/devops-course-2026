@@ -37,5 +37,28 @@ check "Входящий трафик по умолчанию запрещён" "
 printf '[3] Учётные записи\n'
 awk -F: '$3 >= 1000 && $3 < 65534 {printf "    %s (uid=%s)\n", $1, $3}' /etc/passwd
 
+printf '[4] Веб-сервер\n'
+check "Nginx активен" "active" "$(systemctl is-active nginx)"
+NGINX_VALID=no
+if sudo nginx -t; then
+    NGINX_VALID=yes
+fi
+check "Конфигурация nginx корректна" "yes" "$NGINX_VALID"
+
+CERT_VALID=no
+if openssl x509 -checkend 2592000 -noout -in /etc/ssl/certs/devops.crt > /dev/null; then
+    CERT_VALID=yes
+fi
+check "Сертификат действует ещё минимум 30 дней" "yes" "$CERT_VALID"
+
+SITE_READ_ONLY=no
+if WRITABLE_FILES=$(find /var/www/devops-site -perm -o+w); then
+    if [[ -z "$WRITABLE_FILES" ]]; then
+        SITE_READ_ONLY=yes
+    fi
+fi
+check "У остальных пользователей нет права записи в ресурс" "yes" "$SITE_READ_ONLY"
+check "Права закрытого ключа равны 600" "600" "$(sudo stat -c '%a' /etc/ssl/private/devops.key)"
+
 printf 'Пройдено: %s, не пройдено: %s\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]] && exit 0 || exit 1

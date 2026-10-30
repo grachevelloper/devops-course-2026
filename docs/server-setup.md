@@ -205,3 +205,90 @@ PROTO=TCP, DPT=8080. Это исходный адрес Mac, адрес VM, пр
 В начале №6 требуется восстановление со снимка 01 только по этому документу.
 После восстановления нужно повторить разделы 3–6, доставить audit.sh и убедиться
 в коде 0. Пароли и приватные ключи в репозитории отсутствуют.
+
+## 8. Веб-сервер
+
+Установлены пакеты `nginx` и `rsync` из репозитория Ubuntu:
+
+```sh
+sudo apt update
+sudo apt install -y nginx rsync
+```
+
+На Mac встроенный openrsync 2.6.9 не принял обязательный параметр
+`--chmod=D755,F644`. Установлен GNU rsync через `brew install rsync`;
+в PATH перед `/usr/bin` должен находиться `/opt/homebrew/bin`.
+
+Ресурс: `devops.local`. Каталог `/var/www/devops-site` принадлежит
+`devops:devops`; каталоги имеют права 755, файлы — 644. `www-data` читает
+страницы, но не может изменять их. Подготовка каталога:
+
+```sh
+sudo install -d -o devops -g devops -m 755 /var/www/devops-site
+```
+
+Конфигурация хранится в `config/nginx/devops-site`. На VM она устанавливается
+в `/etc/nginx/sites-available/devops-site`. В `sites-enabled` находится только
+ссылка на этот ресурс; ссылка `default` удалена, исходный файл сохранён:
+
+```sh
+sudo install -m 644 config/nginx/devops-site /etc/nginx/sites-available/devops-site
+sudo ln -s /etc/nginx/sites-available/devops-site /etc/nginx/sites-enabled/devops-site
+sudo unlink /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Команды `ln` и `unlink` относятся к первичной настройке. При повторной установке
+существующую правильную ссылку сохраняют. Главный процесс Nginx работает от root,
+рабочие — от www-data. HTTP на порту 80 возвращает 301 на HTTPS, порт 443
+обслуживает статические файлы; неизвестный путь возвращает собственную страницу
+404. Журналы — `/var/log/nginx/devops-site.access.log` и
+`/var/log/nginx/devops-site.error.log`. Правила UFW 80/443 сохранены, профиль
+Nginx Full дополнительно не разрешался.
+
+Сертификат самоподписанный, RSA 2048, срок 365 дней, CN и SAN `devops.local`:
+
+```sh
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/devops.key \
+  -out /etc/ssl/certs/devops.crt \
+  -subj '/CN=devops.local' \
+  -addext 'subjectAltName=DNS:devops.local'
+sudo chmod 600 /etc/ssl/private/devops.key
+sudo chmod 644 /etc/ssl/certs/devops.crt
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Ключ принадлежит root и остаётся только в `/etc/ssl/private`; его читает главный
+процесс Nginx. Сертификат общедоступен; на Mac он получен по ранее проверенному SSH:
+
+```sh
+scp devops:/etc/ssl/certs/devops.crt ~/devops.crt
+curl --cacert ~/devops.crt -I https://devops.local
+```
+
+Без явного доверия `curl` завершился с кодом 60. Совпадающие subject и issuer
+подтверждают самоподпись. HSTS не добавлен. Встроенный macOS LibreSSL не понимает
+`openssl x509 -ext`; поля сертификата проверены OpenSSL внутри Ubuntu.
+
+Доставка из чистой рабочей копии репозитория на Mac:
+
+```sh
+scripts/deploy.sh --dry-run
+scripts/deploy.sh
+```
+
+Сценарий определяет корень Git, требует `site/index.html` и отсутствие всех
+незафиксированных изменений, включая индекс и новые файлы. Один rsync через SSH
+использует `--delete --chmod=D755,F644`; перед первым запуском выполнен dry-run.
+После реальной доставки `curl --cacert` проверяет HTTPS. При ошибке сценарий
+возвращает 1, при успехе — 0 и короткий хеш коммита. Пароль не запрашивается:
+включены BatchMode и ConnectTimeout. UFW limit требует избегать шести новых
+SSH-соединений за 30 секунд; служебные проверки используют одно соединение.
+
+В начале работы VM действительно восстановлена с `01-clean-install`.
+По разделам 3–6 восстановлены учётная запись, ключ, SSH, NAT, UFW и FQDN;
+аудит вернул 0. Восстановление с проверкой заняло 21,9 секунды. Снимок
+`04-nginx-https` сделан на выключенной VM после включения HTTPS с временной
+страницей, до доставки основного сайта. Все журналы экспериментов сохранены
+в `self/study/evidence/practice-6` на Mac.
