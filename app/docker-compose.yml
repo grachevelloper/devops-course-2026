@@ -15,6 +15,7 @@ services:
   app:
     build: .
     image: devops-app:1.0
+    dns_search: ["."]
     env_file: .env
     ports:
       - "127.0.0.1:5000:5000"
