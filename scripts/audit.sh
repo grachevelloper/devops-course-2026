@@ -60,5 +60,20 @@ fi
 check "У остальных пользователей нет права записи в ресурс" "yes" "$SITE_READ_ONLY"
 check "Права закрытого ключа равны 600" "600" "$(sudo stat -c '%a' /etc/ssl/private/devops.key)"
 
+printf '[5] Контейнеризация\n'
+check "Docker активен" "active" "$(systemctl is-active docker)"
+check "СУБД готова" "healthy" "$(docker inspect -f '{{.State.Health.Status}}' app-db-1)"
+
+PORTS_PRIVATE=no
+if LISTENERS=$(ss -H -tln); then
+    PUBLIC_PORTS=$(awk '$4 ~ /:(5000|5432)$/ && $4 !~ /^127[.]0[.]0[.]1:/ {print $4}' <<< "$LISTENERS")
+    if [[ -z "$PUBLIC_PORTS" ]]; then
+        PORTS_PRIVATE=yes
+    fi
+fi
+check "Порты 5000 и 5432 не опубликованы во внешнюю сеть" "yes" "$PORTS_PRIVATE"
+DEVOPS_HOME=$(getent passwd devops | cut -d: -f6)
+check "Права файла app/.env равны 600" "600" "$(stat -c '%a' "$DEVOPS_HOME/app/.env")"
+
 printf 'Пройдено: %s, не пройдено: %s\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]] && exit 0 || exit 1

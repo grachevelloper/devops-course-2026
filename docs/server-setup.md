@@ -292,3 +292,111 @@ SSH-соединений за 30 секунд; служебные проверк
 `04-nginx-https` сделан на выключенной VM после включения HTTPS с временной
 страницей, до доставки основного сайта. Все журналы экспериментов сохранены
 в `self/study/evidence/practice-6` на Mac.
+
+## 9. Контейнеризация
+
+Docker Engine 29.9.2 и Compose 5.6.1 установлены из официального APT-репозитория
+Docker для Ubuntu noble arm64, не из пакета docker.io:
+
+```sh
+sudo apt update
+sudo apt install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+. /etc/os-release
+sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: ${UBUNTU_CODENAME:-$VERSION_CODENAME}
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker devops
+```
+
+После добавления группы выполнен новый вход SSH; `docker run hello-world`
+завершился успешно. В группу docker входит devops. Доступ к Docker фактически
+даёт полномочия root через управление контейнерами и монтированием файлов хоста.
+
+Исходники проекта находятся в `app/` репозитория; на VM — `/home/devops/app`.
+Базовый образ `python:3.12-slim`. Приложение запускается Gunicorn от пользователя
+app, не root; сначала проверено без БД: `/health` вернул 200, `/` — 500 с ошибкой
+подключения к localhost контейнера. Затем настроено `DB_HOST=db`.
+
+Доставка выполняется с Mac из корня репозитория:
+
+```sh
+rsync -avz --delete --exclude=.env --dry-run app/ devops:app/
+rsync -avz --delete --exclude=.env app/ devops:app/
+```
+
+Файл `/home/devops/app/.env` создаётся только на VM, владелец devops, права 600:
+
+```sh
+cd ~/app
+umask 077
+cp .env.example .env
+sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
+docker compose up -d --build --wait
+```
+
+Эти команды создания секрета выполняют один раз. При повторной доставке `.env`
+сохраняют. На Mac и в Git находятся только заглушки `.env.example`; `.env`
+исключён также из контекста сборки. Зависимости устанавливаются до копирования
+app.py; повторная сборка после изменения приветствия использовала кеш pip-слоя.
+
+Compose создаёт сервисы app и db, сеть `app_backend`, именованный том
+`app_db_data`, смонтированный в `/var/lib/postgresql/data`. СУБД —
+`postgres:16-alpine`. Приложение находит db через встроенный DNS сети backend.
+Для app задано `dns_search: ["."]`: это исключает унаследованные от Mac
+поисковые домены DNS и внешнее совпадение имени db при IPv6-поиске.
+Проверены getent hosts db и getent ahostsv4 db внутри контейнера.
+Запуск приложения ожидает успешный pg_isready у db; переменные в healthcheck
+используют $$, чтобы раскрыться внутри контейнера. Оба сервиса имеют
+`restart: unless-stopped`.
+
+Единственный опубликованный порт — `127.0.0.1:5000:5000`; 5432 не опубликован.
+Проверки: `docker compose port app 5000`, `ss -tln` и `docker compose ps`.
+`docker compose down` сохраняет том и счётчик. В учебном эксперименте
+`docker compose down -v` удалил только вновь созданные тестовые посещения;
+после повторного запуска счётчик начался с 1. Для сохранения данных флаг -v
+не используют.
+
+В HTTPS-блок ресурса devops-site добавлено расположение:
+
+```nginx
+location /app/ {
+    proxy_pass http://127.0.0.1:5000/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Конфигурация целиком хранится в `config/nginx/devops-site`. После доставки:
+
+```sh
+sudo install -m 644 config/nginx/devops-site /etc/nginx/sites-available/devops-site
+sudo nginx -t && sudo systemctl reload nginx
+curl --cacert ~/devops.crt https://devops.local/app/health
+```
+
+Последняя команда выполняется на Mac, где находится открытый сертификат.
+Статический `/` сохранён. Завершающий / в proxy_pass заменяет префикс `/app/`:
+`/app/health` поступает в контейнер как `/health`. Nginx завершает TLS,
+передаёт HTTP внутри VM и сообщает исходные имя, адрес клиента и схему заголовками.
+При остановке app Nginx возвращает 502, журнал фиксирует отказ соединения
+с upstream; после запуска app доступ восстанавливается.
+
+В опыте контейнер exposed с публикацией `5001:5000` был доступен с Mac без
+правила UFW для 5001: перенаправление Docker проходит через FORWARD/DNAT.
+После опыта exposed остановлен. Основная конфигурация сохраняет привязку к
+127.0.0.1; правила UFW не ослаблялись. Снимок `05-docker-compose` сделан
+на выключенной VM после проверок связки app + db, до добавления прокси.
+Аудит дополнен разделом [5]; проверка порта испытана с временной публикацией
+5000 на всех интерфейсах, после чего безопасная конфигурация восстановлена.
