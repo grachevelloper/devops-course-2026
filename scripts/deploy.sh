@@ -34,7 +34,7 @@ if ! rsync "${RSYNC_ARGS[@]}" "$LOCAL_DIR" "$REMOTE:$REMOTE_DIR/"; then
 fi
 
 if ! $DRY_RUN; then
-    if ! curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+    if ! curl --fail --silent --show-error --connect-timeout 10 --max-time 20 \
         --cacert "$CA_CERT" "$SITE_URL" > /dev/null; then
         fail "Доставка выполнена, но HTTPS-проверка не пройдена"
     fi
