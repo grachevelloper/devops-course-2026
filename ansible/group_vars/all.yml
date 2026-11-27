@@ -1,0 +1,6 @@
+---
+app_image: ghcr.io/grachevelloper/devops-ci-app
+app_tag: "b73e725894e8351c1650bf03dad7ac0583d8ceda"
+app_container_name: devops-ci-app
+app_host_port: 5000
+app_internal_port: 5000
