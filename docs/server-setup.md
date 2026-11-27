@@ -400,3 +400,36 @@ curl --cacert ~/devops.crt https://devops.local/app/health
 на выключенной VM после проверок связки app + db, до добавления прокси.
 Аудит дополнен разделом [5]; проверка порта испытана с временной публикацией
 5000 на всех интерфейсах, после чего безопасная конфигурация восстановлена.
+
+## 10. Ansible
+
+Плейбук `ansible/site.yml` запускается с управляющего компьютера. Роли
+`base`, `ssh`, `nginx` и `app` выполняются на Ubuntu `devops-vm`.
+Поддерживаются Ubuntu 24.04 amd64 и arm64.
+
+- `inventory/bootstrap.ini` используется для первого входа как `student`.
+- `inventory/prod.ini` используется для последующих запусков как `devops`.
+- `base` устанавливает Docker Engine и системные зависимости.
+- `ssh` добавляет открытый ключ, проверяет конфигурации sudo и SSH и включает UFW.
+- `nginx` проксирует запросы с TCP 80 на `127.0.0.1:5000`.
+- `app` скачивает образ, запускает контейнер и проверяет `/health`.
+
+Образ `ghcr.io/grachevelloper/devops-ci-app` закреплён по полному SHA в
+`ansible/group_vars/all.yml`. Ansible сначала загружает указанный образ, затем
+меняет контейнер. Если тег отсутствует, отказ загрузки оставляет прежний контейнер
+в работе. Путь к ключу указывает на файл управляющего узла.
+
+Из каталога `ansible/`:
+
+```sh
+ansible-galaxy collection install -r requirements.yml
+ansible-playbook -i inventory/bootstrap.ini site.yml --ask-pass --ask-become-pass
+ansible-playbook site.yml
+ansible-playbook verify.yml
+```
+
+После первого запуска подключение выполняется по ключу. Повторный запуск
+`site.yml` показывает, какие задачи изменили состояние. Плейбук `verify.yml`
+проверяет эффективные настройки SSH, состояние контейнера и HTTP-ответ.
+С контроллера запрос `curl --fail http://192.168.56.2/health` проверяет весь путь
+через Nginx.
